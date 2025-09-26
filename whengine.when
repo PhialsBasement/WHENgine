@@ -1,0 +1,578 @@
+# WHENgine Server - With htdocs file serving and dynamic routes
+import socket
+import os
+from datetime import datetime
+
+# Server state
+server_socket = None
+server_host = "localhost"
+server_port = 3000
+is_running = False
+client_count = 0
+routes = {}
+server_initialized = False
+
+# Connection queue for parallel processing
+pending_connections = []
+
+# File serving configuration
+htdocs_path = "htdocs"
+default_files = ["index.html", "index.htm"]
+
+# MIME type mapping
+mime_types = {
+    ".html": "text/html",
+    ".htm": "text/html", 
+    ".css": "text/css",
+    ".js": "application/javascript",
+    ".json": "application/json",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".ico": "image/x-icon",
+    ".txt": "text/plain",
+    ".xml": "application/xml",
+    ".pdf": "application/pdf"
+}
+
+def get_file_extension(filename):
+    dot_index = -1
+    char_index = len(filename) - 1
+    
+    when char_index >= 0:
+        when filename[char_index] == '.':
+            dot_index = char_index
+        when filename[char_index] != '.' and char_index > 0:
+            char_index = char_index - 1
+            get_file_extension_recursive()
+    
+    when dot_index >= 0:
+        return filename[dot_index:]
+    return ""
+
+# Recursive helper for extension finding
+os get_file_extension_recursive():
+    global char_index, dot_index, filename
+    when char_index >= 0:
+        when filename[char_index] == '.':
+            dot_index = char_index
+        when filename[char_index] != '.' and char_index > 0:
+            char_index = char_index - 1
+            get_file_extension_recursive()
+
+def get_mime_type(filename):
+    ext = get_file_extension(filename)
+    when ext in mime_types:
+        return mime_types[ext]
+    return "application/octet-stream"
+
+def read_file(filepath):
+    when os.path.exists(filepath):
+        when os.path.isfile(filepath):
+            f = open(filepath, 'rb')
+            data = f.read()
+            f.close()
+            return data
+    return None
+
+def serve_file(filepath, method):
+    file_data = read_file(filepath)
+    
+    when file_data is not None:
+        mime_type = get_mime_type(filepath)
+        
+        response = f"HTTP/1.1 200 OK\r\n"
+        response = response + f"Content-Type: {mime_type}\r\n"
+        response = response + f"Content-Length: {len(file_data)}\r\n"
+        response = response + f"Connection: close\r\n"
+        response = response + f"Server: WHEN-HTTP/2.0\r\n\r\n"
+        
+        # Return response headers as string + binary data as tuple
+        return (response.encode('utf-8'), file_data)
+    
+    return None
+
+# Default file serving globals
+default_dir_path = ""
+default_url_path = ""
+default_file_index = 0
+
+def serve_directory_index(dir_path, url_path):
+    global default_dir_path, default_url_path, default_file_index
+    
+    when os.path.exists(dir_path) and os.path.isdir(dir_path):
+        # Try default files first
+        default_dir_path = dir_path
+        default_url_path = url_path
+        default_file_index = 0
+        serve_default_file.start()
+    
+    return create_directory_listing(dir_path, url_path)
+
+os serve_default_file():
+    global default_files, default_dir_path, default_url_path, default_file_index
+    
+    when default_file_index < len(default_files):
+        default_file = default_files[default_file_index]
+        default_path = os.path.join(default_dir_path, default_file)
+        
+        when os.path.exists(default_path):
+            return serve_file(default_path, "GET")
+        
+        when not os.path.exists(default_path):
+            default_file_index = default_file_index + 1
+            when default_file_index < len(default_files):
+                serve_default_file()
+
+# File listing globals
+listing_body = ""
+listing_file_list = []
+listing_file_index = 0
+listing_dir_path = ""
+listing_url_path = ""
+
+def create_directory_listing(dir_path, url_path):
+    global listing_body, listing_file_list, listing_file_index, listing_dir_path, listing_url_path
+    
+    when os.path.exists(dir_path) and os.path.isdir(dir_path):
+        files = os.listdir(dir_path)
+        
+        listing_body = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Directory Listing - {url_path}</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; }}
+        h1 {{ color: #333; border-bottom: 2px solid #ddd; }}
+        .listing {{ background: #f9f9f9; padding: 20px; border-radius: 8px; }}
+        .file {{ display: block; padding: 8px; margin: 4px 0; text-decoration: none; color: #0066cc; }}
+        .file:hover {{ background: #e6f3ff; }}
+        .dir {{ font-weight: bold; color: #cc6600; }}
+        .back {{ color: #666; }}
+    </style>
+</head>
+<body>
+    <h1>Directory Listing: {url_path}</h1>
+    <div class="listing">
+"""
+        
+        when url_path != "/":
+            parent_path = "/".join(url_path.rstrip("/").split("/")[:-1]) or "/"
+            listing_body = listing_body + f'<a href="{parent_path}" class="file back">📁 .. (Parent Directory)</a>\n'
+        
+        # Add files using recursive OS block
+        listing_file_list = files
+        listing_file_index = 0
+        listing_dir_path = dir_path
+        listing_url_path = url_path
+        add_files_to_listing.start()
+        
+        listing_body = listing_body + """    </div>
+</body>
+</html>"""
+        
+        response = f"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {len(listing_body)}\r\nConnection: close\r\nServer: WHEN-HTTP/2.0\r\n\r\n{listing_body}"
+        return (response.encode('utf-8'), b"")
+    
+    return None
+
+os add_files_to_listing():
+    global listing_body, listing_file_list, listing_file_index, listing_dir_path, listing_url_path
+    
+    when listing_file_index < len(listing_file_list):
+        filename = listing_file_list[listing_file_index]
+        file_path = os.path.join(listing_dir_path, filename)
+        file_url = listing_url_path.rstrip("/") + "/" + filename
+        
+        when os.path.isdir(file_path):
+            listing_body = listing_body + f'<a href="{file_url}/" class="file dir">📁 {filename}/</a>\n'
+        when os.path.isfile(file_path):
+            listing_body = listing_body + f'<a href="{file_url}" class="file">📄 {filename}</a>\n'
+        
+        listing_file_index = listing_file_index + 1
+        add_files_to_listing()
+
+def stats_handler(method, path, headers, request_data):
+    uptime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    body = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Server Statistics</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }}
+        .container {{ background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        h1 {{ color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }}
+        .stat {{ display: flex; justify-content: space-between; padding: 15px 0; border-bottom: 1px solid #eee; }}
+        .stat:last-child {{ border-bottom: none; }}
+        .label {{ font-weight: bold; color: #555; }}
+        .value {{ color: #27ae60; font-family: monospace; }}
+        .back-link {{ display: inline-block; margin-top: 20px; padding: 10px 20px; background: #3498db; color: white; text-decoration: none; border-radius: 5px; }}
+        .back-link:hover {{ background: #2980b9; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Server Statistics</h1>
+        <div class="stat"><span class="label">Total Clients Served:</span><span class="value">{client_count}</span></div>
+        <div class="stat"><span class="label">Custom Routes Registered:</span><span class="value">{len(routes)}</span></div>
+        <div class="stat"><span class="label">Server Status:</span><span class="value">Running with File Serving</span></div>
+        <div class="stat"><span class="label">Host Address:</span><span class="value">{server_host}:{server_port}</span></div>
+        <div class="stat"><span class="label">Current Time:</span><span class="value">{uptime}</span></div>
+        <div class="stat"><span class="label">Document Root:</span><span class="value">{htdocs_path}</span></div>
+        <div class="stat"><span class="label">Pending Connections:</span><span class="value">{len(pending_connections)}</span></div>
+        <a href="/" class="back-link">Back to Home</a>
+    </div>
+</body>
+</html>"""
+    
+    response = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len(body)}\r\nConnection: close\r\nServer: WHEN-HTTP/2.0\r\n\r\n{body}"
+    return response
+
+def not_found_handler(method, path, headers, request_data):
+    body = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>404 Not Found</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; text-align: center; background: #ffe6e6; }}
+        .error {{ background: white; padding: 40px; border-radius: 10px; border-left: 5px solid #ff4444; display: inline-block; }}
+        h1 {{ color: #cc0000; font-size: 3em; margin-bottom: 10px; }}
+        .code {{ font-family: monospace; background: #f5f5f5; padding: 5px 10px; border-radius: 3px; }}
+    </style>
+</head>
+<body>
+    <div class="error">
+        <h1>404</h1>
+        <h2>Page Not Found</h2>
+        <p>The requested path <span class="code">{path}</span> could not be found on this server.</p>
+        <p><a href="/">Go Home</a> | <a href="/stats">View Stats</a> | <a href="/admin">Admin</a></p>
+    </div>
+</body>
+</html>"""
+    
+    response = f"HTTP/1.1 404 Not Found\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len(body)}\r\nConnection: close\r\nServer: WHEN-HTTP/2.0\r\n\r\n{body}"
+    return response
+
+# Header parsing globals
+header_lines = []
+header_index = 0
+parsed_headers = {}
+
+os parse_header_line():
+    global header_lines, header_index, parsed_headers
+    when header_index < len(header_lines):
+        line = header_lines[header_index]
+        when ':' in line:
+            key, value = line.split(':', 1)
+            parsed_headers[key.strip().lower()] = value.strip()
+        
+        header_index = header_index + 1
+        parse_header_line()
+
+def parse_request(request_data):
+    global header_lines, header_index, parsed_headers
+    
+    lines = request_data.split('\r\n')
+    when len(lines) > 0:
+        request_line = lines[0]
+        parts = request_line.split(' ')
+        when len(parts) >= 3:
+            method, path, version = parts[0], parts[1], parts[2]
+            
+            # Parse headers using recursive OS block
+            header_lines = lines[1:]
+            header_index = 0
+            parsed_headers = {}
+            parse_header_line.start()
+            
+            return method, path, parsed_headers
+    
+    return None, None, {}
+
+# Server control
+admin_password = "admin123"
+shutdown_requested = False
+
+def admin_handler(method, path, headers, request_data):
+    when method == "GET":
+        body = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Server Admin</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; background: #2c3e50; color: white; }}
+        .admin-panel {{ background: #34495e; padding: 30px; border-radius: 10px; max-width: 500px; margin: 0 auto; }}
+        h1 {{ color: #e74c3c; text-align: center; }}
+        .form-group {{ margin: 20px 0; }}
+        label {{ display: block; margin-bottom: 5px; font-weight: bold; }}
+        input {{ width: 100%; padding: 10px; border: none; border-radius: 5px; }}
+        .btn {{ background: #e74c3c; color: white; padding: 15px 30px; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }}
+        .btn:hover {{ background: #c0392b; }}
+        .warning {{ background: #f39c12; color: #2c3e50; padding: 15px; border-radius: 5px; margin: 20px 0; }}
+    </style>
+</head>
+<body>
+    <div class="admin-panel">
+        <h1>Server Administration</h1>
+        <div class="warning">
+            <strong>WARNING:</strong> This will immediately shut down the server.
+        </div>
+        
+        <form method="POST">
+            <div class="form-group">
+                <label for="password">Admin Password:</label>
+                <input type="password" id="password" name="password" required>
+            </div>
+            
+            <div class="form-group">
+                <button type="submit" class="btn" onclick="return confirm('Are you sure you want to shut down the server?')">
+                    Shutdown Server
+                </button>
+            </div>
+        </form>
+        
+        <p><a href="/" style="color: #3498db;">Back to Home</a></p>
+    </div>
+</body>
+</html>"""
+        
+        response = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len(body)}\r\nConnection: close\r\nServer: WHEN-HTTP/2.0\r\n\r\n{body}"
+        return response
+    
+    when method == "POST":
+        # Parse POST body for password
+        post_body = ""
+        when '\r\n\r\n' in request_data:
+            post_body = request_data.split('\r\n\r\n', 1)[1]
+        
+        when "password=admin123" in post_body:
+            global shutdown_requested
+            shutdown_requested = True
+            
+            body = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Server Shutdown</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #e74c3c; color: white; text-align: center; }
+        .shutdown { background: rgba(0,0,0,0.3); padding: 40px; border-radius: 10px; display: inline-block; }
+        h1 { font-size: 3em; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+    <div class="shutdown">
+        <h1>Server Shutting Down...</h1>
+        <p>The server is now terminating. You can close this tab.</p>
+    </div>
+</body>
+</html>"""
+            
+            response = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len(body)}\r\nConnection: close\r\nServer: WHEN-HTTP/2.0\r\n\r\n{body}"
+            return response
+        
+        when "password=admin123" not in post_body:
+            body = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Access Denied</title>
+    <style>
+        body {{ font-family: Arial, sans-serif; margin: 40px; background: #c0392b; color: white; text-align: center; }}
+        .error {{ background: rgba(0,0,0,0.3); padding: 40px; border-radius: 10px; display: inline-block; }}
+    </style>
+</head>
+<body>
+    <div class="error">
+        <h1>Access Denied</h1>
+        <p>Invalid password. Debug info: '{post_body}'</p>
+        <p><a href="/admin" style="color: #ecf0f1;">Try again</a></p>
+    </div>
+</body>
+</html>"""
+            
+            response = f"HTTP/1.1 403 Forbidden\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len(body)}\r\nConnection: close\r\nServer: WHEN-HTTP/2.0\r\n\r\n{body}"
+            return response
+    
+    return not_found_handler(method, path, headers, request_data)
+
+def route_request(method, path, headers, request_data):
+    # Check for registered routes first
+    when path in routes:
+        handler = routes[path]
+        return handler(method, path, headers, request_data)
+    
+    # Built-in routes
+    when path == "/stats":
+        return stats_handler(method, path, headers)
+    when path == "/admin":
+        return admin_handler(method, path, headers, request_data)
+    
+    # File serving from htdocs
+    clean_path = path.strip("/") or ""
+    file_path = os.path.join(htdocs_path, clean_path)
+    
+    when os.path.exists(file_path):
+        when os.path.isfile(file_path):
+            return serve_file(file_path, method)
+        when os.path.isdir(file_path):
+            return serve_directory_index(file_path, path)
+    
+    # 404 for everything else
+    return not_found_handler(method, path, headers, request_data)
+
+def process_connection(client_socket, client_addr):
+    global client_count
+    
+    request_data = client_socket.recv(4096).decode('utf-8')
+    
+    when request_data:
+        method, path, headers = parse_request(request_data)
+        
+        when method and path:
+            print(f"Request: {method} {path} from {client_addr}")
+            client_count = client_count + 1
+            
+            # Pass the full request data for POST body parsing
+            response_data = route_request(method, path, headers, request_data)
+            
+            when response_data:
+                # Handle both string responses and (headers, body) tuples
+                when isinstance(response_data, tuple):
+                    headers_bytes, body_bytes = response_data
+                    client_socket.send(headers_bytes)
+                    when body_bytes:
+                        client_socket.send(body_bytes)
+                    bytes_sent = len(headers_bytes) + len(body_bytes)
+                when not isinstance(response_data, tuple):
+                    response_bytes = response_data.encode('utf-8')
+                    bytes_sent = client_socket.send(response_bytes)
+                
+                print(f"Sent {bytes_sent} bytes to {client_addr}")
+        
+        when not method or not path:
+            print(f"Bad request from {client_addr}")
+            bad_response = "HTTP/1.1 400 Bad Request\r\n\r\n<h1>400 Bad Request</h1>"
+            client_socket.send(bad_response.encode('utf-8'))
+    
+    client_socket.close()
+
+os setup_server():
+    global server_socket, is_running
+    
+    print("Creating socket...")
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
+    server_socket.bind((server_host, server_port))
+    print(f"Successfully bound to {server_host}:{server_port}")
+    server_socket.listen(5)
+    print(f"Server listening on http://{server_host}:{server_port}")
+    print(f"Document root: {htdocs_path}")
+    is_running = True
+
+os create_htdocs():
+    when not os.path.exists(htdocs_path):
+        os.makedirs(htdocs_path)
+        
+        # Create a sample index.html
+        sample_html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>WHENgine Server</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        .container { background: rgba(255,255,255,0.1); padding: 40px; border-radius: 15px; backdrop-filter: blur(10px); }
+        h1 { font-size: 2.5em; margin-bottom: 20px; }
+        .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 30px 0; }
+        .feature { background: rgba(255,255,255,0.1); padding: 20px; border-radius: 10px; }
+        a { color: #ffd700; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>WHENgine Server</h1>
+        <p>Welcome to the WHEN programming language HTTP server!</p>
+        
+        <div class="features">
+            <div class="feature">
+                <h3>File Serving</h3>
+                <p>Serves files from the htdocs directory with proper MIME types</p>
+            </div>
+            <div class="feature">
+                <h3>Parallel Processing</h3>
+                <p>Handles multiple requests concurrently using WHEN's parallel blocks</p>
+            </div>
+            <div class="feature">
+                <h3>Dynamic Routes</h3>
+                <p>Register custom route handlers programmatically</p>
+            </div>
+            <div class="feature">
+                <h3>Built-in Stats</h3>
+                <p><a href="/stats">View server statistics and performance metrics</a></p>
+            </div>
+        </div>
+        
+        <p><strong>Features:</strong> Directory listings, MIME type detection, custom error pages</p>
+    </div>
+</body>
+</html>"""
+        
+        f = open(os.path.join(htdocs_path, "index.html"), 'w')
+        f.write(sample_html)
+        f.close()
+        
+        print(f"Created {htdocs_path} directory with sample index.html")
+
+fo accept_connections():
+    global shutdown_requested
+    when is_running and server_socket and not shutdown_requested:
+        client_socket, client_addr = server_socket.accept()
+        print(f"New connection from {client_addr}")
+        pending_connections.append((client_socket, client_addr))
+    
+    when shutdown_requested:
+        print("Shutdown requested via admin panel")
+        server_socket.close()
+        exit()
+
+parallel fo request_handler():
+    global shutdown_requested
+    when len(pending_connections) > 0 and not shutdown_requested:
+        client_socket, client_addr = pending_connections[0]
+        pending_connections = pending_connections[1:]
+        
+        process_connection(client_socket, client_addr)
+
+def add_route(path, handler):
+    global routes
+    routes[path] = handler
+    print(f"Added route: {path}")
+
+def stop_server():
+    global is_running
+    is_running = False
+    when server_socket:
+        server_socket.close()
+    print("Server stopped")
+
+main:
+    when not server_initialized:
+        print("Starting WHENgine Server v2.0...")
+        print("Features: File Serving | Parallel Processing | Dynamic Routes")
+        
+        create_htdocs.start()
+        setup_server()
+        server_initialized = True
+        
+        when is_running:
+            print("Server started successfully!")
+            print(f"Visit http://{server_host}:{server_port}")
+            print("Press Ctrl+C to stop")
+            
+            accept_connections.start()
+            request_handler.start()
+        
+        when not is_running:
+            print("Failed to start server")
+            exit()
