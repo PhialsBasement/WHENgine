@@ -293,7 +293,7 @@ def parse_request(request_data):
     return None, None, {}
 
 # Server control
-admin_password = "admin123"
+admin_password = "#OmegASeksualec#2025#"
 shutdown_requested = False
 
 def admin_handler(method, path, headers, request_data):
@@ -348,7 +348,7 @@ def admin_handler(method, path, headers, request_data):
         when '\r\n\r\n' in request_data:
             post_body = request_data.split('\r\n\r\n', 1)[1]
         
-        when "password=admin123" in post_body:
+        when f"password={admin_password}" in post_body:
             global shutdown_requested
             shutdown_requested = True
             
@@ -373,7 +373,7 @@ def admin_handler(method, path, headers, request_data):
             response = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {len(body)}\r\nConnection: close\r\nServer: WHEN-HTTP/2.0\r\n\r\n{body}"
             return response
         
-        when "password=admin123" not in post_body:
+        when f"password={admin_password}" not in post_body:
             body = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -416,25 +416,30 @@ def route_request(method, path, headers, request_data):
     when ".." in clean_path:
         return not_found_handler(method, path, headers, request_data)
     
-    # Simple path construction without complex validation
+    # Additional security: Normalize and validate the resolved path
     file_path = os.path.join(htdocs_path, clean_path)
-    print(f"DEBUG: Constructed file_path: {file_path}")
-    print(f"DEBUG: File exists check: {os.path.exists(file_path)}")
-    print(f"DEBUG: Is file check: {os.path.isfile(file_path)}")
+    resolved_path = os.path.abspath(file_path)
+    htdocs_abs = os.path.abspath(htdocs_path)
     
-    when os.path.exists(file_path):
-        print(f"DEBUG: File exists, checking if it's a file")
-        when os.path.isfile(file_path):
-            print(f"DEBUG: Is file, calling serve_file")
-            return serve_file(file_path, method)
-        when os.path.isdir(file_path):
-            print(f"DEBUG: Is directory, calling serve_directory_index")
-            return serve_directory_index(file_path, path)
+    # Ensure the resolved path is within htdocs directory
+    # Use realpath to resolve any symlinks and normalize paths
+    real_htdocs = os.path.realpath(htdocs_abs)
+    real_resolved = os.path.realpath(resolved_path)
+    path_is_valid = False
     
-    when not os.path.exists(file_path):
-        print(f"DEBUG: File does not exist: {file_path}")
+    when real_resolved == real_htdocs:
+        path_is_valid = True
+    when real_resolved.startswith(real_htdocs + os.sep):
+        path_is_valid = True
     
-    print(f"DEBUG: Falling through to 404")
+    when not path_is_valid:
+        return not_found_handler(method, path, headers, request_data)
+    
+    when os.path.exists(resolved_path):
+        when os.path.isfile(resolved_path):
+            return serve_file(resolved_path, method)
+        when os.path.isdir(resolved_path):
+            return serve_directory_index(resolved_path, path)
     
     # 404 for everything else
     return not_found_handler(method, path, headers, request_data)
@@ -444,15 +449,11 @@ def safe_process_connection(client_socket, client_addr):
     global client_count
     connection_error = False
     
-    print(f"DEBUG: safe_process_connection called for {client_addr}")
-    
     # Get request data
     request_data = client_socket.recv(4096).decode('utf-8')
-    print(f"DEBUG: Received request data: {request_data[:100]}...")
     
     when request_data:
         method, path, headers = parse_request(request_data)
-        print(f"DEBUG: Parsed - method: {method}, path: {path}")
         
         when method and path:
             print(f"Request: {method} {path} from {client_addr}")
@@ -460,7 +461,6 @@ def safe_process_connection(client_socket, client_addr):
             
             # Pass the full request data for POST body parsing
             response_data = route_request(method, path, headers, request_data)
-            print(f"DEBUG: route_request returned: {type(response_data)}")
             
             when response_data:
                 # Handle both string responses and (headers, body) tuples
@@ -488,24 +488,19 @@ def safe_process_connection(client_socket, client_addr):
 def add_pending_connection(client_socket, client_addr):
     """Thread-safely add connection to pending queue"""
     global connection_lock, pending_connections
-    print(f"DEBUG: Adding connection to queue from {client_addr}")
     
     with connection_lock:
         pending_connections.append((client_socket, client_addr))
-        print(f"DEBUG: Queue now has {len(pending_connections)} connections")
 
 def get_pending_connection():
     """Thread-safely get next connection from queue"""
     global connection_lock, pending_connections
-    print(f"DEBUG: Attempting to get connection from queue")
     
     with connection_lock:
         when len(pending_connections) > 0:
             connection = pending_connections[0]
             pending_connections = pending_connections[1:]
-            print(f"DEBUG: Got connection, queue now has {len(pending_connections)} connections")
             return connection
-        print(f"DEBUG: No connections in queue")
         return None
 
 os setup_server():
@@ -578,9 +573,7 @@ os create_htdocs():
 
 fo accept_connections():
     global shutdown_requested
-    print(f"DEBUG: accept_connections loop starting")
     when is_running and server_socket and not shutdown_requested:
-        print(f"DEBUG: Waiting for connection...")
         client_socket, client_addr = server_socket.accept()
         print(f"New connection from {client_addr}")
         add_pending_connection(client_socket, client_addr)
@@ -593,35 +586,26 @@ fo accept_connections():
 # Use multiple parallel request handlers for better concurrency
 parallel fo request_handler_1():
     global shutdown_requested
-    print(f"DEBUG: request_handler_1 starting")
     when not shutdown_requested:
-        print(f"DEBUG: request_handler_1 getting connection")
         connection = get_pending_connection()
         when connection is not None:
             client_socket, client_addr = connection
-            print(f"DEBUG: request_handler_1 processing {client_addr}")
             safe_process_connection(client_socket, client_addr)
 
 parallel fo request_handler_2():
     global shutdown_requested
-    print(f"DEBUG: request_handler_2 starting")
     when not shutdown_requested:
-        print(f"DEBUG: request_handler_2 getting connection")
         connection = get_pending_connection()
         when connection is not None:
             client_socket, client_addr = connection
-            print(f"DEBUG: request_handler_2 processing {client_addr}")
             safe_process_connection(client_socket, client_addr)
 
 parallel fo request_handler_3():
     global shutdown_requested
-    print(f"DEBUG: request_handler_3 starting")
     when not shutdown_requested:
-        print(f"DEBUG: request_handler_3 getting connection")
         connection = get_pending_connection()
         when connection is not None:
             client_socket, client_addr = connection
-            print(f"DEBUG: request_handler_3 processing {client_addr}")
             safe_process_connection(client_socket, client_addr)
 
 def add_route(path, handler):
