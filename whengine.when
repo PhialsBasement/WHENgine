@@ -293,7 +293,7 @@ def parse_request(request_data):
     return None, None, {}
 
 # Server control
-admin_password = "#OmegASeksualec#2025#"
+admin_password = "admin123"
 shutdown_requested = False
 
 def admin_handler(method, path, headers, request_data):
@@ -641,4 +641,5 @@ main:
         
         when not is_running:
             print("Failed to start server")
+
             exit()
